@@ -1,0 +1,96 @@
+name: 'Semver Bump'
+description: 'Calculate next semantic version based on commit message prefix'
+inputs:
+  current-version:
+    description: 'Current version (if not provided, will get latest git tag)'
+    required: false
+    default: ''
+  default-bump:
+    description: 'Default bump type when no prefix matches (patch, minor, major)'
+    required: false
+    default: 'patch'
+outputs:
+  version:
+    description: 'The new semantic version'
+    value: ${{ steps.calculate.outputs.version }}
+  bump-type:
+    description: 'The type of bump applied (patch, minor, major)'
+    value: ${{ steps.calculate.outputs.bump-type }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Get current version
+      id: current
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.current-version }}" ]; then
+          echo "version=${{ inputs.current-version }}" >> $GITHUB_OUTPUT
+        else
+          # Get latest git tag, default to 0.0.0 if no tags exist
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          # Remove 'v' prefix if present
+          version=${latest_tag#v}
+          echo "version=$version" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Get latest commit message
+      id: commit
+      shell: bash
+      run: |
+        commit_msg=$(git log -1 --pretty=format:"%s")
+        echo "message=$commit_msg" >> $GITHUB_OUTPUT
+
+    - name: Calculate next version
+      id: calculate
+      shell: bash
+      run: |
+        current_version="${{ steps.current.outputs.version }}"
+        commit_msg="${{ steps.commit.outputs.message }}"
+        default_bump="${{ inputs.default-bump }}"
+        
+        # Parse current version
+        IFS='.' read -ra VERSION_PARTS <<< "$current_version"
+        major=${VERSION_PARTS[0]}
+        minor=${VERSION_PARTS[1]}
+        patch=${VERSION_PARTS[2]}
+        
+        # Determine bump type based on commit message prefix
+        bump_type="$default_bump"
+        
+        if [[ $commit_msg =~ ^(feat|feature)(\(.+\))?!: ]]; then
+          bump_type="major"
+        elif [[ $commit_msg =~ ^(BREAKING[[:space:]]CHANGE|feat|feature)(\(.+\))?!: ]] || [[ $commit_msg =~ BREAKING[[:space:]]CHANGE ]]; then
+          bump_type="major"
+        elif [[ $commit_msg =~ ^(feat|feature)(\(.+\))?: ]]; then
+          bump_type="minor"
+        elif [[ $commit_msg =~ ^(fix|bugfix|patch)(\(.+\))?: ]]; then
+          bump_type="patch"
+        elif [[ $commit_msg =~ ^(docs|doc|chore|style|refactor|perf|test)(\(.+\))?: ]]; then
+          bump_type="patch"
+        fi
+        
+        # Calculate new version
+        case $bump_type in
+          major)
+            new_version="$((major + 1)).0.0"
+            ;;
+          minor)
+            new_version="$major.$((minor + 1)).0"
+            ;;
+          patch)
+            new_version="$major.$minor.$((patch + 1))"
+            ;;
+          *)
+            new_version="$major.$minor.$((patch + 1))"
+            bump_type="patch"
+            ;;
+        esac
+        
+        echo "version=$new_version" >> $GITHUB_OUTPUT
+        echo "bump-type=$bump_type" >> $GITHUB_OUTPUT
+        
+        echo "Current version: $current_version"
+        echo "Commit message: $commit_msg"
+        echo "Bump type: $bump_type"
+        echo "New version: $new_version"
